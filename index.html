@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Merapi Fun Run Scanner</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+:root{--navy:#07142f;--cyan:#13d8ff;--blue:#2d7dff;--pink:#ff3f9b;--green:#2ee6a6;--red:#ff5c6c;--white:#f8fbff;--muted:#9fb1cf}
+*{box-sizing:border-box}body{margin:0;font-family:Inter,system-ui,Arial,sans-serif;background:linear-gradient(150deg,var(--navy),#020713);color:var(--white);min-height:100vh}
+.wrap{max-width:560px;margin:auto;padding:18px}.brand{font-size:12px;font-weight:900;letter-spacing:2px;color:var(--cyan);margin:10px 0}.title{font-size:31px;font-weight:950;margin:0 0 8px}.muted{color:var(--muted);line-height:1.55}
+.card{background:rgba(14,35,75,.88);border:1px solid rgba(255,255,255,.11);border-radius:22px;padding:16px;margin-top:16px}
+#reader{min-height:380px;background:#020713;border-radius:18px;overflow:hidden}
+.btn{width:100%;border:none;border-radius:14px;padding:16px;font-size:17px;font-weight:900;margin-top:12px;cursor:pointer}
+.primary{background:linear-gradient(135deg,var(--cyan),var(--blue));color:#031027}.secondary{background:rgba(255,255,255,.08);color:#fff;border:1px solid rgba(255,255,255,.12)}
+.status{padding:14px;border-radius:14px;margin-top:14px;text-align:center;font-weight:800}.ok{background:rgba(46,230,166,.12);border:1px solid rgba(46,230,166,.3);color:#bfffe8}.err{background:rgba(255,92,108,.12);border:1px solid rgba(255,92,108,.35);color:#ffd2d8}
+.mode{display:inline-block;padding:7px 10px;border-radius:999px;background:rgba(19,216,255,.12);color:var(--cyan);font-weight:900;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand">MERAPI FUN RUN</div>
+  <div class="mode" id="modePill">SCANNER</div>
+  <h1 class="title" id="title">QR Scanner</h1>
+  <p class="muted" id="desc">Arahkan kamera ke QR peserta.</p>
+
+  <div class="card">
+    <div id="reader"></div>
+    <button id="startBtn" class="btn primary" onclick="startCamera()">AKTIFKAN KAMERA</button>
+    <button id="switchBtn" class="btn secondary" onclick="switchCamera()" style="display:none">GANTI KAMERA</button>
+    <div id="status"></div>
+  </div>
+</div>
+
+<script>
+const qs=new URLSearchParams(location.search);
+const mode=(qs.get('mode')||'checkin').toLowerCase()==='finish'?'finish':'checkin';
+const returnUrl=qs.get('returnUrl')||'';
+let qr=null,cameras=[],cameraIndex=0,busy=false;
+
+document.getElementById('modePill').textContent=mode==='finish'?'FINISH':'CHECK-IN';
+document.getElementById('title').textContent=mode==='finish'?'Finish Scanner':'Check-In Scanner';
+document.getElementById('desc').textContent=mode==='finish'
+  ?'Scan QR tepat ketika peserta melewati garis finish.'
+  :'Scan QR peserta untuk registrasi ulang kehadiran.';
+
+async function startCamera(){
+  const btn=document.getElementById('startBtn');
+  btn.disabled=true;btn.textContent='MEMBUKA KAMERA...';
+  try{
+    cameras=await Html5Qrcode.getCameras();
+    if(!cameras||!cameras.length)throw new Error('Kamera tidak ditemukan.');
+    let backIndex=cameras.findIndex(c=>/back|rear|environment/i.test(c.label||''));
+    cameraIndex=backIndex>=0?backIndex:cameras.length-1;
+    await runCamera(cameras[cameraIndex].id);
+    btn.style.display='none';
+    if(cameras.length>1)document.getElementById('switchBtn').style.display='block';
+  }catch(e){
+    btn.disabled=false;btn.textContent='COBA AKTIFKAN KAMERA LAGI';
+    showStatus('Kamera gagal dibuka: '+(e&&e.message?e.message:String(e)),false);
+  }
+}
+async function runCamera(id){
+  if(qr){try{if(qr.isScanning)await qr.stop();await qr.clear()}catch(e){}}
+  qr=new Html5Qrcode('reader');
+  await qr.start(id,{fps:15,qrbox:{width:260,height:260},aspectRatio:1.0},onScan,()=>{});
+}
+async function switchCamera(){
+  if(!cameras.length)return;
+  cameraIndex=(cameraIndex+1)%cameras.length;
+  try{await runCamera(cameras[cameraIndex].id)}catch(e){showStatus('Tidak dapat mengganti kamera.',false)}
+}
+async function onScan(code){
+  if(busy)return;busy=true;
+  showStatus('QR terbaca. Mengirim ke aplikasi…',true);
+  try{if(qr&&qr.isScanning)await qr.stop()}catch(e){}
+  const payload={type:'MFR_SCAN',mode:mode,code:String(code||'')};
+
+  let sent=false;
+  try{
+    if(window.opener&&!window.opener.closed){
+      window.opener.postMessage(payload,'*');
+      sent=true;
+      setTimeout(()=>window.close(),350);
+    }
+  }catch(e){}
+
+  if(!sent&&returnUrl){
+    const sep=returnUrl.includes('?')?'&':'?';
+    location.href=returnUrl+sep+'mfrmode='+encodeURIComponent(mode)+'&mfrcode='+encodeURIComponent(payload.code);
+    return;
+  }
+  if(!sent){
+    showStatus('QR: '+payload.code+'. Kembali ke aplikasi dan masukkan BIB/kode secara manual.',true);
+    busy=false;
+  }
+}
+function showStatus(msg,ok){
+  document.getElementById('status').innerHTML='<div class="status '+(ok?'ok':'err')+'">'+escapeHtml(msg)+'</div>';
+}
+function escapeHtml(v){return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;")}
+</script>
+</body>
+</html>
